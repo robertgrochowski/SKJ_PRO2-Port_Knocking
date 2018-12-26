@@ -10,7 +10,7 @@ public class Server {
 
         InetAddress adressSerweraDNS = InetAddress.getByName("localhost");
         DatagramSocket ds = new DatagramSocket(5011, adressSerweraDNS);
-
+//test
         while(true)
         {
             DatagramPacket dpToRecv = new DatagramPacket(new byte[1460], 1460);
