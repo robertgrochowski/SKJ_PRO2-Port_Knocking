@@ -41,7 +41,6 @@ public class Client
         TCPListener listener = new TCPListener();
         new Thread(listener).start();
 
-
         DatagramSocket ds = new DatagramSocket();
 
         String serverAddress = args[0];
@@ -61,6 +60,7 @@ public class Client
 
     //TODO: try exceptions, wrong server adress, no ports, bad syntax, no last port?
     public static void main(String[] args) throws IOException, InterruptedException {
+        Thread.sleep(3000); //TODO
         new Client().run(args);
     }
 }

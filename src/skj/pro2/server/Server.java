@@ -1,8 +1,11 @@
 package skj.pro2.server;//otwieramy zadana parametrem ilosc portow UDP i numery tych portow
 
 import java.io.IOException;
+import java.lang.reflect.Parameter;
 import java.net.*;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 public class Server {
@@ -13,6 +16,7 @@ public class Server {
     private int[] validPortSeq;
     private Map<InetAddress, Boolean[]> candidates;
     private Map<InetAddress, Long> lastCheck;
+    private final Server serverInstance;
 
     class UDPListener implements Runnable{
         private int port;
@@ -30,10 +34,11 @@ public class Server {
                 String[] split = received.trim().split(":");
                 int seqNo = Integer.parseInt(split[1]);
 
-                synchronized(this)
+                synchronized(serverInstance)
                 {
                     Boolean[] array;
                     System.out.println("Connecting IP: " + packet.getAddress());
+
                     if(candidates.containsKey(packet.getAddress()))
                     {
                         array = candidates.get(packet.getAddress());
@@ -46,6 +51,9 @@ public class Server {
                             System.out.println("Port " + port + " approved? :" + array[i]);
                         }
                     }
+
+                    if(candidates.replace(packet.getAddress(), array) == null)
+                        candidates.put(packet.getAddress(), array);
                 }
 
             } catch (IOException e) {
@@ -62,18 +70,22 @@ public class Server {
         serverAddress = InetAddress.getByName("localhost");
         candidates = new HashMap<>();
         lastCheck = new HashMap<>();
+        serverInstance = this;
     }
 
-    private void run(String[] args) {
+    private void run(String[] args) throws InterruptedException {
         validPortSeq = new int[args.length];
 
-        for(int i = 0; i < args.length; i++) {
+        for(int i = 0; i < args.length; i++) { //TODO: synchronized?
             validPortSeq[i] = Integer.parseInt(args[i]);
             new Thread(new UDPListener(validPortSeq[i])).start();
         }
 
         System.out.println("Server started");
+
         //Thread for validating
+        List<InetAddress> toRemove = new ArrayList<>();
+
         while(true)
         {
             synchronized(this)
@@ -95,25 +107,35 @@ public class Server {
                         }
                     }
 
-                    if (everyoneGrantedAccess) {
+                    if (everyoneResponded && everyoneGrantedAccess) {
                         //START TCP
                         System.out.println("Everyone granted the access! starting tcp");
+                        toRemove.add(entry.getKey());
                     }
                     else
                     {
-                        if (everyoneResponded || System.currentTimeMillis() - lastCheck.get(entry.getKey()) > SEQUENCE_TIMEOUT) {
-                            candidates.remove(entry.getKey());
-                            lastCheck.remove(entry.getKey());
-                            System.out.println(entry.getKey() + "timeout...");
+                        //remove monitor if 1.timeout or 2.everyone has responded
+                        if(everyoneResponded || (lastCheck.containsKey(entry.getKey()) && System.currentTimeMillis() - lastCheck.get(entry.getKey()) > SEQUENCE_TIMEOUT)) {
+                            toRemove.add(entry.getKey());
+                            System.out.println(entry.getKey() + ": timeout...");
                         }
-                        else lastCheck.replace(entry.getKey(), System.currentTimeMillis());
+                        else if(!lastCheck.containsKey(entry.getKey()))
+                            lastCheck.put(entry.getKey(), System.currentTimeMillis());
                     }
                 }
+
+                if(toRemove.size() > 0) {
+                    lastCheck.keySet().removeAll(toRemove);
+                    candidates.keySet().removeAll(toRemove);
+                    toRemove.clear();
+                }
+
+                Thread.sleep(100);
             }
         }
     }
 
-    public static void main(String[] args) throws IOException {
+    public static void main(String[] args) throws IOException, InterruptedException {
         new Server().run(args);
     }
 }
