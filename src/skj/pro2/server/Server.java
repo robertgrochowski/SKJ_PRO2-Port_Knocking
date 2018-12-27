@@ -1,6 +1,6 @@
 package skj.pro2.server;//otwieramy zadana parametrem ilosc portow UDP i numery tych portow
 
-import java.io.IOException;
+import java.io.*;
 import java.lang.reflect.Parameter;
 import java.net.*;
 import java.util.ArrayList;
@@ -14,8 +14,8 @@ public class Server {
 
     private InetAddress serverAddress;
     private int[] validPortSeq;
-    private Map<InetAddress, Boolean[]> candidates;
-    private Map<InetAddress, Long> lastCheck;
+    private Map<SocketAddress, Boolean[]> candidates;
+    private Map<SocketAddress, Long> lastCheck;
     private final Server serverInstance;
 
     class UDPListener implements Runnable{
@@ -37,11 +37,11 @@ public class Server {
                 synchronized(serverInstance)
                 {
                     Boolean[] array;
-                    System.out.println("Connecting IP: " + packet.getAddress());
+                    System.out.println("Connecting IP: " + packet.getSocketAddress());
 
-                    if(candidates.containsKey(packet.getAddress()))
+                    if(candidates.containsKey(packet.getSocketAddress()))
                     {
-                        array = candidates.get(packet.getAddress());
+                        array = candidates.get(packet.getSocketAddress());
                     } else array = new Boolean[validPortSeq.length];
 
                     for(int i = 0; i < validPortSeq.length; i++)
@@ -52,8 +52,8 @@ public class Server {
                         }
                     }
 
-                    if(candidates.replace(packet.getAddress(), array) == null)
-                        candidates.put(packet.getAddress(), array);
+                    if(candidates.replace(packet.getSocketAddress(), array) == null)
+                        candidates.put(packet.getSocketAddress(), array);
                 }
 
             } catch (IOException e) {
@@ -73,7 +73,7 @@ public class Server {
         serverInstance = this;
     }
 
-    private void run(String[] args) throws InterruptedException {
+    private void run(String[] args) throws InterruptedException, IOException {
         validPortSeq = new int[args.length];
 
         for(int i = 0; i < args.length; i++) { //TODO: synchronized?
@@ -84,13 +84,13 @@ public class Server {
         System.out.println("Server started");
 
         //Thread for validating
-        List<InetAddress> toRemove = new ArrayList<>();
+        List<SocketAddress> toRemove = new ArrayList<>();
 
         while(true)
         {
             synchronized(this)
             {
-                for(Map.Entry<InetAddress, Boolean[]> entry : candidates.entrySet())
+                for(Map.Entry<SocketAddress, Boolean[]> entry : candidates.entrySet())
                 {
                     Boolean[] accessGranted = entry.getValue();
                     boolean everyoneGrantedAccess = true;
@@ -108,9 +108,10 @@ public class Server {
                     }
 
                     if (everyoneResponded && everyoneGrantedAccess) {
-                        //START TCP
+
                         System.out.println("Everyone granted the access! starting tcp");
                         toRemove.add(entry.getKey());
+                        startTCPCommunication(entry.getKey());
                     }
                     else
                     {
@@ -133,6 +134,48 @@ public class Server {
                 Thread.sleep(100);
             }
         }
+    }
+
+    private void startTCPCommunication(SocketAddress host) {
+
+        new Thread(() -> {
+            try {
+                ServerSocket serverSocket = new ServerSocket(0); //get default free port
+                byte[] packet = ("WELCOME:" + serverSocket.getLocalPort()).getBytes();
+                DatagramSocket ds = new DatagramSocket();
+                DatagramPacket dp = new DatagramPacket(packet, packet.length, host);
+
+                ds.send(dp);
+                ds.close();
+
+                Socket socket = serverSocket.accept();
+                System.out.println("Client TCP connected! " + socket.getInetAddress());
+                BufferedReader br = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+                BufferedWriter bw = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
+
+                writeLine(bw, "WELCOME");
+
+                String response = br.readLine();
+
+                writeLine(bw, "G3G5EGH26166SHH5525");
+
+                response = br.readLine();
+
+
+                System.out.println("Closing connection!");
+
+                socket.close();
+
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }).start();
+    }
+
+    void writeLine(BufferedWriter bw, String msg) throws IOException {
+        bw.write(msg);
+        bw.newLine();
+        bw.flush();
     }
 
     public static void main(String[] args) throws IOException, InterruptedException {

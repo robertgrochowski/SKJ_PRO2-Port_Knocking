@@ -5,23 +5,38 @@ import java.net.*;
 
 public class Client
 {
-    private ServerSocket serverSocket;
-    private boolean hasConnection;
+    private InetAddress serverAddress;
+    private DatagramSocket ds;
 
     public class TCPListener implements Runnable {
+
         @Override
         public void run() {
             try {
-                Socket socket = serverSocket.accept();
-                hasConnection = true;
+                DatagramPacket packet = new DatagramPacket(new byte[1460], 1460);
+                ds.receive(packet);
 
+                String received = new String(packet.getData());
+                System.out.println("Client RECV: "+received);
+                ds.close();
+
+                String[] split = received.trim().split(":");
+                int TCPPort = Integer.parseInt(split[1]);
+
+                Socket socket = new Socket(serverAddress, TCPPort);
                 BufferedReader br = new BufferedReader(new InputStreamReader(socket.getInputStream()));
                 BufferedWriter bw = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
 
-                String request = br.readLine();
+                String request = br.readLine(); //wait for welcome
                 System.out.println("Read TCP: " + request);
 
-                serverSocket.close();
+                writeLine(bw, "AUTH_REQ");
+
+                request = br.readLine();
+                System.out.println("Auth key: " + request);
+
+                writeLine(bw, "OK");
+                socket.close();
 
             } catch (IOException e) {
                 e.printStackTrace();
@@ -29,33 +44,33 @@ public class Client
         }
     }
 
-    private Client(){
-        hasConnection = false;
+    void writeLine(BufferedWriter bw, String msg) throws IOException {
+        bw.write(msg);
+        bw.newLine();
+        bw.flush();
     }
 
     private void run(String[] args) throws IOException, InterruptedException {
+        //wysylanie na port ktory jest ostatni w sekwencji
 
-        //Opening serverSocket, assuming that last given port is our TCP listener port as well
-        int TCPPort = Integer.parseInt(args[args.length-1]);
-        serverSocket = new ServerSocket(TCPPort);
-        TCPListener listener = new TCPListener();
-        new Thread(listener).start();
+        ds = new DatagramSocket();
 
-        DatagramSocket ds = new DatagramSocket();
-
-        String serverAddress = args[0];
+        String serverIP = args[0];
+        serverAddress = InetAddress.getByName(serverIP);
         for(int i = 1; i < args.length; i++)
         {
             byte[] packet = ("SEQ_REQ:" + (i-1)).getBytes();
-            DatagramPacket dpToSend = new DatagramPacket(packet, packet.length, InetAddress.getByName(serverAddress), Integer.parseInt(args[i]));
+            DatagramPacket dpToSend = new DatagramPacket(packet, packet.length, serverAddress, Integer.parseInt(args[i]));
             ds.send(dpToSend);
             System.out.println("package sent: "+i);
         }
 
-        //Wait for conection
+        //Wait for response for tcp port info
+
+        new Thread(new TCPListener()).start();
         Thread.sleep(5000);
-        if(!hasConnection)
-            serverSocket.close();
+        ds.close();
+
     }
 
     //TODO: try exceptions, wrong server adress, no ports, bad syntax, no last port?
