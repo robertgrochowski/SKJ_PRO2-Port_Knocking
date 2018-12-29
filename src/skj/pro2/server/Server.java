@@ -1,4 +1,4 @@
-package skj.pro2.server;//otwieramy zadana parametrem ilosc portow UDP i numery tych portow
+package skj.pro2.server;
 
 import java.io.*;
 import java.lang.reflect.Parameter;
@@ -7,6 +7,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class Server {
 
@@ -25,39 +27,52 @@ public class Server {
         public void run() {
             try {
                 DatagramSocket socket = new DatagramSocket(port, serverAddress);
-                DatagramPacket packet = new DatagramPacket(new byte[1460], 1460);
+                log("Start listening on " + port + " UDP port");
 
-                socket.receive(packet);
-                String received = new String(packet.getData());
-                System.out.println("RECV: "+received);
-
-                String[] split = received.trim().split(":");
-                int seqNo = Integer.parseInt(split[1]);
-
-                synchronized(serverInstance)
+                while(true)
                 {
-                    Boolean[] array;
-                    System.out.println("Connecting IP: " + packet.getSocketAddress());
+                    DatagramPacket packet = new DatagramPacket(new byte[1460], 1460);
 
-                    if(candidates.containsKey(packet.getSocketAddress()))
-                    {
-                        array = candidates.get(packet.getSocketAddress());
-                    } else array = new Boolean[validPortSeq.length];
+                    socket.receive(packet);
+                    String received = new String(packet.getData());
+                    log("RECEIVED MESSAGE [" + received + "] from [" + packet.getSocketAddress() + "] on port ["+port+"]");
 
-                    for(int i = 0; i < validPortSeq.length; i++)
-                    {
-                        if(validPortSeq[i] == port) {
-                            array[i] = seqNo == i;
-                            System.out.println("Port " + port + " approved? :" + array[i]);
-                        }
+                    Pattern pattern = Pattern.compile("(\\s*AUTH_REQ:(\\d+)\\s*)");
+                    Matcher match = pattern.matcher(received);
+                    if (!match.find()) {
+                        log("Received message has wrong syntax... aborting");
+                        continue;
                     }
 
-                    if(candidates.replace(packet.getSocketAddress(), array) == null)
-                        candidates.put(packet.getSocketAddress(), array);
-                }
 
-            } catch (IOException e) {
-                e.printStackTrace();
+                    int seqNo = Integer.parseInt(match.group(2));
+
+                    synchronized (serverInstance)
+                    {
+                        Boolean[] permitArray;
+
+                        //We have our client in memory already (he connected to other ports before)
+                        if (candidates.containsKey(packet.getSocketAddress()))
+                            permitArray = candidates.get(packet.getSocketAddress());
+                        else
+                            permitArray = new Boolean[validPortSeq.length];
+
+                        //Now, we are checking is received sequence in message is corresponding to valid seq
+                        for (int i = 0; i < validPortSeq.length; i++) {
+                            if (validPortSeq[i] == port) {
+                                permitArray[i] = seqNo == i;
+                                System.out.println("UDP Port [" + port + "] has approved the client's seq?:" + permitArray[i]);
+                            }
+                        }
+
+                        //update (or put) new permitArray
+                        if (candidates.replace(packet.getSocketAddress(), permitArray) == null)
+                            candidates.put(packet.getSocketAddress(), permitArray);
+                    }
+                }
+            } catch (Exception e) {
+                System.err.println(e);
+                System.exit(1);
             }
         }
 
@@ -73,35 +88,33 @@ public class Server {
         serverInstance = this;
     }
 
-    private void run(String[] args) throws InterruptedException, IOException {
-        validPortSeq = new int[args.length];
+    private void run(String[] args) throws InterruptedException {
 
-        for(int i = 0; i < args.length; i++) { //TODO: synchronized?
-            validPortSeq[i] = Integer.parseInt(args[i]);
-            new Thread(new UDPListener(validPortSeq[i])).start();
+        log("Starting the server");
+
+        synchronized (serverInstance) {
+            validPortSeq = new int[args.length];
+
+            for (int i = 0; i < args.length; i++) {
+                validPortSeq[i] = Integer.parseInt(args[i]);
+                new Thread(new UDPListener(validPortSeq[i])).start();
+            }
         }
 
-        System.out.println("Server started");
-
-        //Thread for validating
         List<SocketAddress> toRemove = new ArrayList<>();
-
         while(true)
         {
-            synchronized(this)
+            synchronized (serverInstance)
             {
-                for(Map.Entry<SocketAddress, Boolean[]> entry : candidates.entrySet())
-                {
+                for (Map.Entry<SocketAddress, Boolean[]> entry : candidates.entrySet()) {
                     Boolean[] accessGranted = entry.getValue();
                     boolean everyoneGrantedAccess = true;
                     boolean everyoneResponded = true;
 
-                    for (int i = 0; i < entry.getValue().length; i++)
-                    {
-                        if(accessGranted[i] == null)
+                    for (int i = 0; i < entry.getValue().length; i++) {
+                        if (accessGranted[i] == null)
                             everyoneResponded = false;
-                        else if(!accessGranted[i])
-                        {
+                        else if (!accessGranted[i]) {
                             everyoneGrantedAccess = false;
                             break;
                         }
@@ -109,75 +122,96 @@ public class Server {
 
                     if (everyoneResponded && everyoneGrantedAccess) {
 
-                        System.out.println("Everyone granted the access! starting tcp");
+                        log("Granting the access for [" + entry.getKey() + "]");
                         toRemove.add(entry.getKey());
-                        startTCPCommunication(entry.getKey());
-                    }
-                    else
-                    {
+                        startTCPCommunication((InetSocketAddress) entry.getKey());
+                    } else {
                         //remove monitor if 1.timeout or 2.everyone has responded
-                        if(everyoneResponded || (lastCheck.containsKey(entry.getKey()) && System.currentTimeMillis() - lastCheck.get(entry.getKey()) > SEQUENCE_TIMEOUT)) {
+                        if (everyoneResponded || (lastCheck.containsKey(entry.getKey()) && System.currentTimeMillis() - lastCheck.get(entry.getKey()) > SEQUENCE_TIMEOUT)) {
                             toRemove.add(entry.getKey());
-                            System.out.println(entry.getKey() + ": timeout...");
-                        }
-                        else if(!lastCheck.containsKey(entry.getKey()))
+                            log("Client [" + entry.getKey() + "] is timeout..");
+                        } else if (!lastCheck.containsKey(entry.getKey()))
                             lastCheck.put(entry.getKey(), System.currentTimeMillis());
                     }
                 }
 
-                if(toRemove.size() > 0) {
+                if (toRemove.size() > 0) {
                     lastCheck.keySet().removeAll(toRemove);
                     candidates.keySet().removeAll(toRemove);
                     toRemove.clear();
                 }
 
-                Thread.sleep(100);
+                Thread.sleep(100); //decrease cpu load?
             }
         }
     }
 
-    private void startTCPCommunication(SocketAddress host) {
+
+    private void startTCPCommunication(InetSocketAddress host) {
 
         new Thread(() -> {
             try {
                 ServerSocket serverSocket = new ServerSocket(0); //get default free port
-                byte[] packet = ("WELCOME:" + serverSocket.getLocalPort()).getBytes();
+                log("Starting TCP socket on port: " + serverSocket.getLocalPort());
+                byte[] packet = ("PORT:" + serverSocket.getLocalPort()).getBytes();
+
+                //Sending UDP with TCP port
                 DatagramSocket ds = new DatagramSocket();
                 DatagramPacket dp = new DatagramPacket(packet, packet.length, host);
+
+                log("TCP port has been sent by UDP packet");
 
                 ds.send(dp);
                 ds.close();
 
                 Socket socket = serverSocket.accept();
-                System.out.println("Client TCP connected! " + socket.getInetAddress());
+
+                //TODO: timeout
+                while(!socket.getInetAddress().equals(host.getAddress()))
+                {
+                    log("Unpermitted client tried to connect on TCP port! " +
+                            "Closing connection and waiting for valid client");
+                    socket.close();
+                    socket = serverSocket.accept();
+                }
+
+                log("Client ["+socket.getInetAddress()+"] has established TCP connection");
                 BufferedReader br = new BufferedReader(new InputStreamReader(socket.getInputStream()));
                 BufferedWriter bw = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
 
                 writeLine(bw, "WELCOME");
+                if(br.readLine().equals("AUTH_REQ"))
+                {
+                    log("Sending authorization key");
+                    writeLine(bw, "G3G5EGH26166SHH5525");
 
-                String response = br.readLine();
+                    if(br.readLine().equals("OK"))
+                        log("Client received key successfully");
+                    else
+                        log("Client notified issue while receiving key");
+                }
 
-                writeLine(bw, "G3G5EGH26166SHH5525");
-
-                response = br.readLine();
-
-
-                System.out.println("Closing connection!");
-
+                log("Closing TCP connection");
                 socket.close();
 
             } catch (IOException e) {
-                e.printStackTrace();
+                System.err.println("An error occurred while tried to communicate with remote client");
+                System.err.println(e);
             }
         }).start();
     }
 
-    void writeLine(BufferedWriter bw, String msg) throws IOException {
+    private void log(String message) {
+        System.out.println(message);
+    }
+
+    private void writeLine(BufferedWriter bw, String msg) throws IOException {
         bw.write(msg);
         bw.newLine();
         bw.flush();
     }
 
+    //Check args syntax
     public static void main(String[] args) throws IOException, InterruptedException {
         new Server().run(args);
     }
