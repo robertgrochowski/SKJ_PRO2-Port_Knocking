@@ -4,7 +4,7 @@ Computer Networks in Java
 # Goal
 Implement Port Knocking in Java
 https://en.wikipedia.org/wiki/Port_knocking
-# 
+# Batch files
 The project include compile and run scripts
 * `compile.bat` - compiles source files into `out` directory
 * `run_success.bat` - runs server and client; client is knocking with correct port sequence and the connection is established
