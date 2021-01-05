@@ -140,8 +140,6 @@ public class Server {
                     candidates.keySet().removeAll(toRemove);
                     toRemove.clear();
                 }
-
-                Thread.sleep(100); //decrease cpu load?
             }
         }
     }
